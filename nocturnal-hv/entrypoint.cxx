@@ -19,10 +19,10 @@ bool entry_point( entry_t* entry ) {
 	kernel::dbg_print( "[nocturnal] image_base=0x%llx image_size=0x%x\n",
 		entry->m_image_base, entry->m_image_size );
 
-	//if ( !callback::create( ) ) {
-	//	kernel::dbg_print( "[nocturnal] could not register power callback\n" );
-	//	return false;
-	//}
+	if ( !callback::create( ) ) {
+		kernel::dbg_print( "[nocturnal] could not register power callback\n" );
+		return false;
+	}
 
 	if ( !guest::initialize( ) ) {
 		kernel::dbg_print( "[nocturnal] could not initialize guest\n" );
