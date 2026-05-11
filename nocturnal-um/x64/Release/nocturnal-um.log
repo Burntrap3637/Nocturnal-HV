@@ -1,0 +1,8 @@
+﻿  main.cpp
+  Generating code
+  Previous IPDB not found, fall back to full compilation.
+  All 4 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  Finished generating code
+  nocturnal-um.vcxproj -> E:\nocturnal\x64\Release\nocturnal-um.exe
+  'pwsh.exe' is not recognized as an internal or external command,
+  operable program or batch file.
