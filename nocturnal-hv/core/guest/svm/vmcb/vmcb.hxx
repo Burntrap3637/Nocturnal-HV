@@ -33,9 +33,6 @@ namespace guest {
 
             ctrl.m_intercept_misc2 |= svm_intercept_misc2_vmrun;
 
-            if ( m_shared_state->m_nrip_save )
-                ctrl.m_intercept_misc2 |= svm_intercept_misc2_nrip_save;
-
             ctrl.m_msrpm_base_pa =
                 kernel::mm_get_physical_address( m_shared_state->m_msrpm ).m_quad_part;
             ctrl.m_guest_asid = 1;

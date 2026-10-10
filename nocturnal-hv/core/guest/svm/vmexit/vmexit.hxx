@@ -130,9 +130,9 @@ namespace guest {
                 case 8: case 10: case 11: case 12:
                 case 13: case 14: case 17:
                     event |= ( 1ull << 11 );
-                    vp_data->m_guest_vmcb.m_control_area.m_event_inj =
+                    event |= ( static_cast< std::uint64_t >(
                         static_cast< std::uint32_t >(
-                            vp_data->m_guest_vmcb.m_control_area.m_exit_info1 );
+                            vp_data->m_guest_vmcb.m_control_area.m_exit_info1 ) ) << 32 );
                     break;
                 default:
                     break;
