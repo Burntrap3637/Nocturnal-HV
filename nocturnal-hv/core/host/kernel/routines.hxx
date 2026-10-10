@@ -46,6 +46,17 @@ namespace kernel {
         return reinterpret_cast< function_t* >( mm_allocate_independent_pages )( size, -1, 0, 0 );
     }
 
+    void mm_free_contiguous_memory( void* base_address ) {
+        static auto export_address = 0ull;
+        if ( !export_address ) {
+            export_address = get_export( m_ntoskrnl_base, oxorany( "MmFreeContiguousMemory" ) );
+            if ( !export_address ) return;
+        }
+
+        using function_t = void( * )( void* );
+        reinterpret_cast< function_t >( export_address )( base_address );
+    }
+
     void mm_free_independent_pages( std::uint64_t independent_pages, std::size_t size ) {
         static auto mm_free_independent_pages = 0ull;
         if ( !mm_free_independent_pages ) {

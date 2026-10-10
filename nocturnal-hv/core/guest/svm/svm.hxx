@@ -191,8 +191,8 @@ namespace guest {
             } );
 
         if ( m_shared_state ) {
-            //if ( m_shared_state->m_msrpm )
-            //    kernel::mm_free_contiguous_memory( m_shared_state->m_msrpm );
+            if ( m_shared_state->m_msrpm )
+                memory::free_contiguous( m_shared_state->m_msrpm );
             memory::free_page( m_shared_state, sizeof( shared_state_t ) );
             m_shared_state = nullptr;
         }

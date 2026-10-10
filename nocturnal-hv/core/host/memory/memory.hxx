@@ -25,4 +25,9 @@ namespace memory {
 	void free_page( type addr, std::size_t size ) {
 		kernel::mm_free_independent_pages( reinterpret_cast< std::uint64_t >( addr ), size );
 	}
+
+	template <typename type = std::uint64_t>
+	void free_contiguous( type addr ) {
+		kernel::mm_free_contiguous_memory( reinterpret_cast< void* >( addr ) );
+	}
 }

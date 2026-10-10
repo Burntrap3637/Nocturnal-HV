@@ -182,14 +182,7 @@ namespace guest {
                 ( static_cast< std::uint64_t >( regs[ 3 ] ) << 32 )
                 | static_cast< std::uint32_t >( regs[ 0 ] ) );
 
-            //if ( vp_data->m_guest_vmcb )
-            //    memory::free_contiguous( vp_data->m_guest_vmcb );
-            //if ( vp_data->m_host_vmcb )
-            //    memory::free_contiguous( vp_data->m_host_vmcb );
-            //if ( vp_data->m_host_state_area )
-            //    memory::free_contiguous( vp_data->m_host_state_area );
-
-            ExFreePoolWithTag( vp_data, 'vpDT' );
+            memory::free_contiguous( vp_data );
             m_processor_states[ idx ] = nullptr;
 
             kernel::dbg_print( "[nocturnal] processor %u devirtualized\n", idx );
