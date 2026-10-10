@@ -70,7 +70,6 @@ namespace guest {
                     break;
 
                 case cpuid_watch_page: {
-                    // ECX = GPA >> 12 — arm an NX trap on that 4KB NPT page
                     const std::uint64_t page_pa =
                         static_cast< std::uint64_t >( ctx->m_vp_regs->m_rcx ) << 12;
 
@@ -104,7 +103,6 @@ namespace guest {
                 }
 
                 case cpuid_read_page: {
-                    // ECX = GPA >> 12, RDX:RBX = destination VA
                     const std::uint64_t page_pa =
                         static_cast< std::uint64_t >( ctx->m_vp_regs->m_rcx ) << 12;
                     const std::uint64_t dst_va =
@@ -231,14 +229,12 @@ namespace guest {
                 if ( src ) {
                     std::memcpy( wp.m_shadow, src, 0x1000 );
                     wp.m_captured = true;
+                    npt::set_nx( page_pa, false );
+                    vp_data->m_guest_vmcb.m_control_area.m_tlb_control =
+                        tlb_ctrl_flush_asid;
+                    vp_data->m_guest_vmcb.m_control_area.m_vmcb_clean &=
+                        ~static_cast< std::uint64_t >( vmcb_clean_np );
                 }
-
-                // Disarm the NX trap so the guest can execute normally.
-                npt::set_nx( page_pa, false );
-                vp_data->m_guest_vmcb.m_control_area.m_tlb_control =
-                    tlb_ctrl_flush_asid;
-                vp_data->m_guest_vmcb.m_control_area.m_vmcb_clean &=
-                    ~static_cast< std::uint64_t >( vmcb_clean_np );
                 break;
             }
         }
@@ -270,8 +266,6 @@ namespace guest {
 
             NT_ASSERT( vp_data->m_host_stack_layout.reserved1 == MAXUINT64 );
 
-            // Reset TLB_CONTROL: it persists in the VMCB across exits and would
-            // re-flush on every VMRUN if left set. Handlers that need a flush set it back.
             vp_data->m_guest_vmcb.m_control_area.m_tlb_control = 0;
 
             guest_regs->m_rax = vp_data->m_guest_vmcb.m_state_save_area.m_rax;

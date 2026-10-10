@@ -12,7 +12,6 @@ namespace npt {
         pd_entry_2mb_t entries[ 512 ];
     };
 
-    // 4KB NPT leaf PTE — used when splitting a 2MB large page
     struct npt_pte_t {
         union {
             std::uint64_t m_as_uint64;
@@ -95,7 +94,6 @@ namespace npt {
         return kernel::mm_get_physical_address( g_pml4 ).m_quad_part;
     }
 
-    // Walk NPT structures to find the 2MB PDE covering gpa.
     pd_entry_2mb_t* find_pde( std::uint64_t gpa ) {
         if ( !g_pml4 ) return nullptr;
 
@@ -120,8 +118,6 @@ namespace npt {
         return &pd->entries[ pd_idx ];
     }
 
-    // Split a 2MB NPT large page into 512 4KB PTEs.
-    // On second call for the same region, returns true immediately (idempotent).
     bool split_page( std::uint64_t gpa ) {
         const std::uint64_t aligned_2mb = gpa & ~0x1FFFFFull;
 
@@ -148,8 +144,6 @@ namespace npt {
         }
 
         const auto pt_pa = kernel::mm_get_physical_address( pt ).m_quad_part;
-        // Replace the large-page PDE with a non-large PDE pointing to our 4KB PT.
-        // Non-large PDE: P=1, W=1, U=1, large_page=0, PFN at bits[12:51].
         pde->m_as_uint64 = 0x7ull | ( pt_pa & ~0xFFFull );
 
         g_split_table[ g_split_count ].m_pd_gpa = aligned_2mb;
@@ -159,7 +153,6 @@ namespace npt {
         return true;
     }
 
-    // Find the 4KB NPT PTE for gpa (only valid after split_page).
     npt_pte_t* find_pte( std::uint64_t gpa ) {
         const std::uint64_t aligned_2mb = gpa & ~0x1FFFFFull;
         for ( std::uint32_t i = 0; i < g_split_count; i++ ) {
@@ -171,7 +164,6 @@ namespace npt {
         return nullptr;
     }
 
-    // Set or clear the NX bit on the 4KB NPT PTE covering gpa.
     void set_nx( std::uint64_t gpa, bool nx ) {
         auto* pte = find_pte( gpa );
         if ( pte ) pte->m_no_execute = nx ? 1u : 0u;
