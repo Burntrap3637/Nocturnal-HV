@@ -70,6 +70,20 @@ static constexpr std::uint32_t svm_intercept_misc2_cr8_write_after_done = ( 1UL 
 static constexpr std::uint32_t svm_intercept_misc2_nrip_save = ( 1UL << 3 );
 static constexpr std::uint64_t svm_np_enable_np_enable = ( 1ULL << 0 );
 
+// VMCB clean bits (AMD APM Vol 2 §15.15.2)
+static constexpr std::uint32_t vmcb_clean_np            = ( 1u << 4 );   // nested paging state (n_cr3, np_enable)
+// TLB control values (AMD APM Vol 2 §15.16)
+static constexpr std::uint32_t tlb_ctrl_flush_asid      = 3;             // flush all TLB entries for this guest ASID
+// NPF EXITINFO1 bits (AMD APM Vol 2 §15.25.6)
+static constexpr std::uint64_t npf_error_present        = ( 1ull << 0 ); // physical page present in NPT
+static constexpr std::uint64_t npf_error_write          = ( 1ull << 1 ); // write access
+static constexpr std::uint64_t npf_error_user           = ( 1ull << 2 ); // user-mode access
+static constexpr std::uint64_t npf_error_rsvd           = ( 1ull << 3 ); // reserved bit violation
+static constexpr std::uint64_t npf_error_fetch          = ( 1ull << 4 ); // instruction fetch (NX violation)
+// CPUID hypercall leaves
+constexpr std::uint32_t cpuid_watch_page                = 0x77617463;    // 'watc' — ECX=GPA>>12
+constexpr std::uint32_t cpuid_read_page                 = 0x72656164;    // 'read' — ECX=GPA>>12, RDX:RBX=dest VA
+
 #pragma pack(push, 1)
 struct vmcb_control_area_t {
     std::uint16_t m_intercept_cr_read;              // +0x000

@@ -69,6 +69,67 @@ namespace guest {
                     }
                     break;
 
+                case cpuid_watch_page: {
+                    // ECX = GPA >> 12 — arm an NX trap on that 4KB NPT page
+                    const std::uint64_t page_pa =
+                        static_cast< std::uint64_t >( ctx->m_vp_regs->m_rcx ) << 12;
+
+                    auto* shared = static_cast< guest::shared_state_t* >(
+                        vp_data->m_host_stack_layout.shared_vp_data );
+
+                    regs[ 0 ] = 0;
+                    if ( shared->m_watched_count < 32 ) {
+                        auto* shadow = reinterpret_cast< std::uint8_t* >(
+                            ExAllocatePool2( POOL_FLAG_NON_PAGED, 0x1000, 'wPgS' ) );
+                        if ( shadow && npt::split_page( page_pa ) ) {
+                            npt::set_nx( page_pa, true );
+                            vp_data->m_guest_vmcb.m_control_area.m_tlb_control =
+                                tlb_ctrl_flush_asid;
+                            vp_data->m_guest_vmcb.m_control_area.m_vmcb_clean &=
+                                ~static_cast< std::uint64_t >( vmcb_clean_np );
+
+                            auto& wp = shared->m_watched_pages[ shared->m_watched_count++ ];
+                            wp.m_guest_pa = page_pa;
+                            wp.m_shadow   = shadow;
+                            wp.m_captured = false;
+                            wp.m_active   = true;
+                            regs[ 0 ] = 1;
+                        }
+                        else if ( shadow ) {
+                            ExFreePoolWithTag( shadow, 'wPgS' );
+                        }
+                    }
+                    regs[ 1 ] = regs[ 2 ] = regs[ 3 ] = 0;
+                    break;
+                }
+
+                case cpuid_read_page: {
+                    // ECX = GPA >> 12, RDX:RBX = destination VA
+                    const std::uint64_t page_pa =
+                        static_cast< std::uint64_t >( ctx->m_vp_regs->m_rcx ) << 12;
+                    const std::uint64_t dst_va =
+                        ( ctx->m_vp_regs->m_rdx << 32 )
+                        | ( ctx->m_vp_regs->m_rbx & 0xFFFFFFFFull );
+
+                    auto* shared = static_cast< guest::shared_state_t* >(
+                        vp_data->m_host_stack_layout.shared_vp_data );
+
+                    regs[ 0 ] = 0;
+                    for ( std::uint32_t i = 0; i < shared->m_watched_count; i++ ) {
+                        auto& wp = shared->m_watched_pages[ i ];
+                        if ( !wp.m_active || !wp.m_captured ) continue;
+                        if ( ( wp.m_guest_pa & ~0xFFFull ) != page_pa ) continue;
+
+                        std::memcpy(
+                            reinterpret_cast< void* >( dst_va ),
+                            wp.m_shadow, 0x1000 );
+                        regs[ 0 ] = 1;
+                        break;
+                    }
+                    regs[ 1 ] = regs[ 2 ] = regs[ 3 ] = 0;
+                    break;
+                }
+
                 default:
                     break;
             }
@@ -141,6 +202,47 @@ namespace guest {
             vp_data->m_guest_vmcb.m_control_area.m_event_inj = event;
         }
 
+        void handle_npf( virtual_processor_data_t* vp_data, guest_context_t* ) {
+            const auto gpa = vp_data->m_guest_vmcb.m_control_area.m_exit_info2;
+            const auto err = vp_data->m_guest_vmcb.m_control_area.m_exit_info1;
+
+            if ( !( err & npf_error_fetch ) ) {
+                KeBugCheckEx( 0xDEAD0002,
+                    vp_data->m_guest_vmcb.m_control_area.m_exit_info2,
+                    vp_data->m_guest_vmcb.m_control_area.m_exit_info1,
+                    vp_data->m_guest_vmcb.m_state_save_area.m_rip,
+                    vp_data->m_guest_vmcb.m_state_save_area.m_cr3 );
+                return;
+            }
+
+            // Execute fault on NX-armed NPT page — the game has decrypted this page; capture it.
+            auto* shared = static_cast< guest::shared_state_t* >(
+                vp_data->m_host_stack_layout.shared_vp_data );
+
+            const std::uint64_t page_pa = gpa & ~0xFFFull;
+
+            for ( std::uint32_t i = 0; i < shared->m_watched_count; i++ ) {
+                auto& wp = shared->m_watched_pages[ i ];
+                if ( !wp.m_active || wp.m_captured ) continue;
+                if ( ( wp.m_guest_pa & ~0xFFFull ) != page_pa ) continue;
+
+                auto* src = reinterpret_cast< void* >(
+                    physical::physical_to_virtual( page_pa ) );
+                if ( src ) {
+                    std::memcpy( wp.m_shadow, src, 0x1000 );
+                    wp.m_captured = true;
+                }
+
+                // Disarm the NX trap so the guest can execute normally.
+                npt::set_nx( page_pa, false );
+                vp_data->m_guest_vmcb.m_control_area.m_tlb_control =
+                    tlb_ctrl_flush_asid;
+                vp_data->m_guest_vmcb.m_control_area.m_vmcb_clean &=
+                    ~static_cast< std::uint64_t >( vmcb_clean_np );
+                break;
+            }
+        }
+
         void handle_xsetbv( virtual_processor_data_t* vp_data, guest_context_t* ctx ) {
             const std::uint32_t xcr = static_cast< std::uint32_t >( ctx->m_vp_regs->m_rcx );
             const std::uint64_t value =
@@ -167,6 +269,10 @@ namespace guest {
             __svm_vmload( vp_data->m_host_stack_layout.host_vmcb_pa );
 
             NT_ASSERT( vp_data->m_host_stack_layout.reserved1 == MAXUINT64 );
+
+            // Reset TLB_CONTROL: it persists in the VMCB across exits and would
+            // re-flush on every VMRUN if left set. Handlers that need a flush set it back.
+            vp_data->m_guest_vmcb.m_control_area.m_tlb_control = 0;
 
             guest_regs->m_rax = vp_data->m_guest_vmcb.m_state_save_area.m_rax;
 
@@ -212,11 +318,7 @@ namespace guest {
                     break;
 
                 case vmexit_npf:
-                    KeBugCheckEx( 0xDEAD0002,
-                        vp_data->m_guest_vmcb.m_control_area.m_exit_info2,
-                        vp_data->m_guest_vmcb.m_control_area.m_exit_info1,
-                        vp_data->m_guest_vmcb.m_state_save_area.m_rip,
-                        vp_data->m_guest_vmcb.m_state_save_area.m_cr3 );
+                    handle_npf( vp_data, &ctx );
                     break;
                 case vmexit_shutdown:
                     KeBugCheckEx( 0xDEAD0007,

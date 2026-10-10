@@ -1,9 +1,5 @@
 namespace npt {
 
-    // Matches SimpleSvm's SvBuildNestedPageTables exactly.
-    // Maps 0 -> 512GB using 2MB large pages.
-    // All allocations are physically contiguous and page-aligned.
-
     struct pml4_table_t {
         pml4_entry_2mb_t entries[ 512 ];
     };
@@ -16,11 +12,45 @@ namespace npt {
         pd_entry_2mb_t entries[ 512 ];
     };
 
-    // Stored in shared_state so we can free them later
-    // Replace your existing m_pml4_entries / m_pml4e_trees with these
-    pml4_table_t* g_pml4 = nullptr;
-    pdpt_table_t* g_pdpt = nullptr;  // one PDPT covers 512GB
-    pd_table_t* g_pds = nullptr;  // 512 PDs, one per PDPT entry
+    // 4KB NPT leaf PTE — used when splitting a 2MB large page
+    struct npt_pte_t {
+        union {
+            std::uint64_t m_as_uint64;
+            struct {
+                std::uint64_t m_valid      : 1;   // [0]
+                std::uint64_t m_write      : 1;   // [1]
+                std::uint64_t m_user       : 1;   // [2]
+                std::uint64_t m_pwt        : 1;   // [3]
+                std::uint64_t m_pcd        : 1;   // [4]
+                std::uint64_t m_accessed   : 1;   // [5]
+                std::uint64_t m_dirty      : 1;   // [6]
+                std::uint64_t m_pat        : 1;   // [7]
+                std::uint64_t m_global     : 1;   // [8]
+                std::uint64_t m_avl        : 3;   // [9:11]
+                std::uint64_t m_pfn        : 40;  // [12:51]
+                std::uint64_t m_reserved   : 11;  // [52:62]
+                std::uint64_t m_no_execute : 1;   // [63]
+            };
+        };
+    };
+    static_assert( sizeof( npt_pte_t ) == 8 );
+
+    struct npt_pt_table_t {
+        npt_pte_t entries[ 512 ];
+    };
+
+    struct split_entry_t {
+        std::uint64_t   m_pd_gpa;  // 2MB-aligned GPA of the split region
+        npt_pt_table_t* m_pt;      // host VA of the 4KB PT
+    };
+
+    pml4_table_t* g_pml4       = nullptr;
+    pdpt_table_t* g_pdpt       = nullptr;
+    pd_table_t*   g_pds        = nullptr;
+
+    static constexpr std::uint32_t max_split_pages = 256;
+    split_entry_t g_split_table[ max_split_pages ]{};
+    std::uint32_t g_split_count = 0;
 
     bool build_identity_map( ) {
         g_pml4 = memory::alloc_contiguous<pml4_table_t*>( sizeof( pml4_table_t ) );
@@ -63,6 +93,88 @@ namespace npt {
 
     std::uint64_t get_pml4_pa( ) {
         return kernel::mm_get_physical_address( g_pml4 ).m_quad_part;
+    }
+
+    // Walk NPT structures to find the 2MB PDE covering gpa.
+    pd_entry_2mb_t* find_pde( std::uint64_t gpa ) {
+        if ( !g_pml4 ) return nullptr;
+
+        const auto pml4_idx = ( gpa >> 39 ) & 0x1FF;
+        const auto pdpt_idx = ( gpa >> 30 ) & 0x1FF;
+        const auto pd_idx   = ( gpa >> 21 ) & 0x1FF;
+
+        auto& pml4e = g_pml4->entries[ pml4_idx ];
+        if ( !pml4e.m_valid ) return nullptr;
+
+        auto* pdpt = reinterpret_cast< pdpt_table_t* >(
+            physical::physical_to_virtual( pml4e.m_page_frame_number << 12 ) );
+        if ( !pdpt ) return nullptr;
+
+        auto& pdpte = pdpt->entries[ pdpt_idx ];
+        if ( !pdpte.m_valid ) return nullptr;
+
+        auto* pd = reinterpret_cast< pd_table_t* >(
+            physical::physical_to_virtual( pdpte.m_page_frame_number << 12 ) );
+        if ( !pd ) return nullptr;
+
+        return &pd->entries[ pd_idx ];
+    }
+
+    // Split a 2MB NPT large page into 512 4KB PTEs.
+    // On second call for the same region, returns true immediately (idempotent).
+    bool split_page( std::uint64_t gpa ) {
+        const std::uint64_t aligned_2mb = gpa & ~0x1FFFFFull;
+
+        for ( std::uint32_t i = 0; i < g_split_count; i++ ) {
+            if ( g_split_table[ i ].m_pd_gpa == aligned_2mb )
+                return true;
+        }
+
+        if ( g_split_count >= max_split_pages ) return false;
+
+        auto* pde = find_pde( aligned_2mb );
+        if ( !pde || !pde->m_valid || !pde->m_large_page ) return false;
+
+        auto* pt = memory::alloc_contiguous<npt_pt_table_t*>( sizeof( npt_pt_table_t ) );
+        if ( !pt ) return false;
+
+        const std::uint64_t base_pa = static_cast< std::uint64_t >( pde->m_page_frame_number ) << 21;
+        for ( std::uint32_t i = 0; i < 512; i++ ) {
+            pt->entries[ i ].m_as_uint64 = 0;
+            pt->entries[ i ].m_valid     = 1;
+            pt->entries[ i ].m_write     = 1;
+            pt->entries[ i ].m_user      = 1;
+            pt->entries[ i ].m_pfn       = ( base_pa >> 12 ) + i;
+        }
+
+        const auto pt_pa = kernel::mm_get_physical_address( pt ).m_quad_part;
+        // Replace the large-page PDE with a non-large PDE pointing to our 4KB PT.
+        // Non-large PDE: P=1, W=1, U=1, large_page=0, PFN at bits[12:51].
+        pde->m_as_uint64 = 0x7ull | ( pt_pa & ~0xFFFull );
+
+        g_split_table[ g_split_count ].m_pd_gpa = aligned_2mb;
+        g_split_table[ g_split_count ].m_pt     = pt;
+        g_split_count++;
+
+        return true;
+    }
+
+    // Find the 4KB NPT PTE for gpa (only valid after split_page).
+    npt_pte_t* find_pte( std::uint64_t gpa ) {
+        const std::uint64_t aligned_2mb = gpa & ~0x1FFFFFull;
+        for ( std::uint32_t i = 0; i < g_split_count; i++ ) {
+            if ( g_split_table[ i ].m_pd_gpa == aligned_2mb ) {
+                const auto pt_idx = ( gpa >> 12 ) & 0x1FF;
+                return &g_split_table[ i ].m_pt->entries[ pt_idx ];
+            }
+        }
+        return nullptr;
+    }
+
+    // Set or clear the NX bit on the 4KB NPT PTE covering gpa.
+    void set_nx( std::uint64_t gpa, bool nx ) {
+        auto* pte = find_pte( gpa );
+        if ( pte ) pte->m_no_execute = nx ? 1u : 0u;
     }
 
     void build_msrpm( ) {

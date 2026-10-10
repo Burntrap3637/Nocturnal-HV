@@ -27,7 +27,7 @@ namespace kernel {
             if ( !cur_name || !cur_func )
                 continue;
 
-            if ( !std::strcmp( export_name, reinterpret_cast< char* >( cur_name ) ) )
+            if ( std::strcmp( export_name, reinterpret_cast< char* >( cur_name ) ) )
                 return cur_func;
         }
 
