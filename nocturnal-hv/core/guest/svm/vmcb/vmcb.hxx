@@ -33,9 +33,6 @@ namespace guest {
 
             ctrl.m_intercept_misc2 |= svm_intercept_misc2_vmrun;
 
-            if ( m_shared_state->m_nrip_save )
-                ctrl.m_intercept_misc2 |= svm_intercept_misc2_nrip_save;
-
             ctrl.m_msrpm_base_pa =
                 kernel::mm_get_physical_address( m_shared_state->m_msrpm ).m_quad_part;
             ctrl.m_guest_asid = 1;
@@ -185,14 +182,7 @@ namespace guest {
                 ( static_cast< std::uint64_t >( regs[ 3 ] ) << 32 )
                 | static_cast< std::uint32_t >( regs[ 0 ] ) );
 
-            //if ( vp_data->m_guest_vmcb )
-            //    memory::free_contiguous( vp_data->m_guest_vmcb );
-            //if ( vp_data->m_host_vmcb )
-            //    memory::free_contiguous( vp_data->m_host_vmcb );
-            //if ( vp_data->m_host_state_area )
-            //    memory::free_contiguous( vp_data->m_host_state_area );
-
-            ExFreePoolWithTag( vp_data, 'vpDT' );
+            memory::free_contiguous( vp_data );
             m_processor_states[ idx ] = nullptr;
 
             kernel::dbg_print( "[nocturnal] processor %u devirtualized\n", idx );

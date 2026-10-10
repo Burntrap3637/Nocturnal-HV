@@ -10,12 +10,21 @@ namespace guest {
         __declspec( align( 0x1000 ) ) pd_entry_2mb_t   m_pd_entries[ 512 ][ 512 ];
     };
 
+    struct watched_page_t {
+        std::uint64_t m_guest_pa;
+        std::uint8_t* m_shadow;   // 4KB, ExAllocatePool2-allocated
+        bool          m_captured;
+        bool          m_active;
+    };
+
     struct shared_state_t {
         void* m_msrpm;
         pml4_entry_2mb_t* m_pml4_entries;
         pml4e_tree_t* m_pml4e_trees[ 2 ];
         std::uint32_t     m_nrip_save;
         std::uint32_t     m_decode_assists;
+        watched_page_t    m_watched_pages[ 32 ];
+        std::uint32_t     m_watched_count;
     };
 
     struct host_stack_layout_t {
